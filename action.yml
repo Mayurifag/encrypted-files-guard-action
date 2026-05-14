@@ -1,0 +1,15 @@
+---
+name: Encrypted Files Guard
+description: Fail when git-crypt or EJSON files are committed in plaintext.
+author: Mayurifag
+
+runs:
+  using: composite
+  steps:
+    - name: Check files are encrypted
+      shell: bash
+      run: bash "${GITHUB_ACTION_PATH}/check-encrypted-files"
+
+branding:
+  icon: lock
+  color: gray-dark

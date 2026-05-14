@@ -1,0 +1,31 @@
+---
+name: CI
+
+"on":
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - uses: editorconfig-checker/action-editorconfig-checker@840e866d93b8e032123c23bac69dece044d4d84c
+        with:
+          version: v3.6.1
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+
+      - name: Install CI dependencies
+        run: |
+          npm install -g markdownlint-cli2@0.22.1
+          pipx install yamllint==1.38.0
+
+      - name: Run CI
+        run: make ci

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly GIT_CRYPT_HEADER_HEX="00474954435259505400"
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  printf 'error: not a git repository\n' >&2
+  exit 2
+}
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+tracked="$tmp_dir/tracked"
+attributes="$tmp_dir/attributes"
+failures="$tmp_dir/failures"
+: >"$failures"
+
+add_failure() {
+  printf '%s\n' "$1" >>"$failures"
+}
+
+is_git_crypt_encrypted() {
+  local path="$1"
+  local header
+
+  header="$(od -An -tx1 -N10 -v "$path" 2>/dev/null | tr -d '[:space:]')" || return 1
+  [[ "$header" == "$GIT_CRYPT_HEADER_HEX" ]]
+}
+
+check_ejson() {
+  local relative_path="$1"
+  local path="$root/$relative_path"
+  local jq_output
+  local issue
+
+  if is_git_crypt_encrypted "$path"; then
+    return
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    printf 'error: jq is required to check .ejson files\n' >&2
+    exit 2
+  fi
+
+  if ! jq_output="$(jq -r '
+    def path_part:
+      if type == "number" then "[" + tostring + "]"
+      elif test("^[A-Za-z_][A-Za-z0-9_]*$") then "." + .
+      else "[" + tojson + "]"
+      end;
+    def render_path($path): "$" + ($path | map(path_part) | join(""));
+
+    if type != "object" then
+      "top-level value is not an object"
+    else
+      (
+        if has("_public_key") and (._public_key | type == "string") and (._public_key | length > 0) then []
+        else ["missing valid _public_key"]
+        end
+      )
+      + [
+        paths | select(length > 0 and .[-1] == "_private_key")
+        | "contains _private_key at " + render_path(.)
+      ]
+      + [
+        paths(strings) as $path
+        | select($path != ["_public_key"] and $path[-1] != "_private_key" and ((getpath($path) | startswith("EJ[")) | not))
+        | "plaintext string at " + render_path($path)
+      ]
+      + (
+        if ([paths(strings) as $path | select($path != ["_public_key"] and $path[-1] != "_private_key" and (getpath($path) | startswith("EJ[")))] | length) > 0 then []
+        else ["contains no encrypted EJSON values"]
+        end
+      )
+      | .[]
+    end
+  ' "$path" 2>/dev/null)"; then
+    add_failure "$relative_path: invalid JSON"
+    return
+  fi
+
+  while IFS= read -r issue; do
+    [[ -n "$issue" ]] && add_failure "$relative_path: $issue"
+  done <<<"$jq_output"
+
+  return 0
+}
+
+git -C "$root" ls-files -z >"$tracked"
+git -C "$root" check-attr -z filter --stdin <"$tracked" >"$attributes"
+
+while IFS= read -r -d '' relative_path && IFS= read -r -d '' _attribute && IFS= read -r -d '' value; do
+  if [[ "$value" == "git-crypt" ]] && ! is_git_crypt_encrypted "$root/$relative_path"; then
+    add_failure "$relative_path: missing git-crypt encrypted file header"
+  fi
+done <"$attributes"
+
+while IFS= read -r -d '' relative_path; do
+  if [[ "$relative_path" == *.ejson ]]; then
+    check_ejson "$relative_path"
+  fi
+done <"$tracked"
+
+if [[ -s "$failures" ]]; then
+  printf 'Encrypted file guard failed:\n' >&2
+  while IFS= read -r failure; do
+    printf -- '- %s\n' "$failure" >&2
+  done <"$failures"
+  exit 1
+fi
+
+printf 'Encrypted file guard passed.\n'
