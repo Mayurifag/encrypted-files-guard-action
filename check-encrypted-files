@@ -115,4 +115,6 @@ if [[ -s "$failures" ]]; then
   exit 1
 fi
 
+if ((
+
 printf 'Encrypted file guard passed.\n'
