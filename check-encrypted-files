@@ -43,6 +43,11 @@ check_ejson() {
     exit 2
   fi
 
+  if [[ ! -s "$path" ]]; then
+    add_failure "$relative_path: invalid JSON"
+    return
+  fi
+
   if ! jq_output="$(jq -r '
     def path_part:
       if type == "number" then "[" + tostring + "]"
